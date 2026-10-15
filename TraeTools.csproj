@@ -1,0 +1,87 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- P2-2：升到 net10.0-windows（SDK 10.0.401 已装），为 PublishAot 做准备 -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- P2-1：不再使用 WindowsForms（NativeAOT 硬阻塞之一）；登录窗口已拆到独立 TraeTools.LoginHost 项目 -->
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\avalonia-logo.ico</ApplicationIcon>
+    <!-- P2-2：Avalonia 编译绑定。反射绑定（ReflectionBinding）在 NativeAOT/裁剪下不可用，
+         全部视图已带 x:DataType，#DashboardView 的悬浮命中区也从嵌套类型提升为顶层类型。
+         默认开启后新增页面若出现绑定编译错误，需补 x:DataType 而不是回退反射绑定。 -->
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <AssemblyTitle>TraeTools</AssemblyTitle>
+    <Product>TraeTools</Product>
+    <!-- 以下 Version/InformationalVersion 由 ReadVersionFromJson 目标在生成 AssemblyInfo 前从 version.json 自动读取并覆盖。
+         发版时只需修改 version.json，csproj 无需手工同步。 -->
+    <Version>1.0.0</Version>
+    <InformationalVersion>1.0.0</InformationalVersion>
+    <NoWarn>CA1416;MSB3277</NoWarn>
+    <!-- 发布瘦身：单文件 + 原生库内嵌自解压 + Brotli 压缩，减小 exe 体积（仅影响发布，不影响普通编译） -->
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- P2-3 正规瘦身：full 裁剪（实测单文件 49.12MB → 23.46MB，启动正常）。
+         前置条件已就绪：JSON 全部走源生成（AppJson/AppJsonIndented，无反射序列化）、
+         XAML 全部走编译绑定、ViewLocator 改为显式映射 —— PublishTrimmed/PublishAot 分析 0 条 IL2026/IL3050。 -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>full</TrimMode>
+    <!-- P2-2 NativeAOT（opt-in，默认关闭）。本机实测：0 条 AOT 告警，AOT 产物可正常启动并建窗。
+         AOT 产物**不是单文件**，libSkiaSharp / av_libglesv2 / e_sqlite3 / libHarfBuzzSharp / libsodium
+         必须与 exe 同目录；分发已改为 zip 整包（release.yml 产出 TraeTools-win-x64.zip），
+         应用内更新器（UpdaterService）已改为「下载 zip → SHA-256 校验 → 解包 → 整套文件原子替换 → 重启」。
+         启用方式：dotnet publish TraeTools.csproj -c Release -r win-x64 -p:EnableAot=true -o publish_aot -->
+    <EnableAot Condition="'$(EnableAot)' == ''">false</EnableAot>
+    <PublishAot Condition="'$(EnableAot)' == 'true'">true</PublishAot>
+  </PropertyGroup>
+  <!-- P2-1：登录宿主是独立项目（有自己的 csproj/bin/obj），主程序不编译、不打包它的源码 -->
+  <ItemGroup>
+    <Compile Remove="TraeTools.LoginHost\**" />
+    <None Remove="TraeTools.LoginHost\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+    <AvaloniaResource Include="Styles\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- version.json 内嵌为 exe 资源：保证单文件分发/发布时 exe 自带真实版本，无需外置文件同步 -->
+    <EmbeddedResource Include="version.json" />
+    <!-- 同时复制到输出目录（非单文件或调试时也可见），供无内嵌机制的旧流程回退 -->
+    <None Include="version.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <!-- 从 version.json 自动同步 Version/InformationalVersion（生成 AssemblyInfo 前执行） -->
+  <Target Name="ReadVersionFromJson" BeforeTargets="GenerateAssemblyInfo;GenerateAssemblyInfoInternal">
+    <PropertyGroup>
+      <_VJsonContent>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\version.json'))</_VJsonContent>
+      <_VJsonVer>$([System.Text.RegularExpressions.Regex]::Match('$(_VJsonContent)', '&quot;version&quot;\s*:\s*&quot;([^&quot;]+)&quot;').Groups[1].Value)</_VJsonVer>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(_VJsonVer)' != ''">
+      <Version>$(_VJsonVer)</Version>
+      <InformationalVersion>$(_VJsonVer)</InformationalVersion>
+    </PropertyGroup>
+    <Message Text="Version read from version.json: $(_VJsonVer) (applied to Version/InformationalVersion)" Importance="high" />
+  </Target>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.2" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3">
+      <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
+      <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.*" />
+    <PackageReference Include="Sodium.Core" Version="1.4.1" />
+    <!-- DPAPI：原先由 Microsoft.WindowsDesktop.App（UseWindowsForms）间接提供，拆掉 WinForms 后需显式引用 -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.*" />
+    <!-- P2-1：Microsoft.Web.WebView2（NativeAOT 硬阻塞之二）已随登录窗口移到 TraeTools.LoginHost 项目 -->
+  </ItemGroup>
+</Project>
+
+
